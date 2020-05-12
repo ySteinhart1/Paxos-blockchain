@@ -16,6 +16,12 @@ Have each client take in a command line argument of its process number, and use 
 
 Should use `TCP` in a try-catch for socket connections.
 
+Each client should have the following variables:
+
+* `BallotNum`: Past ballot process took part in (initially <0,0>)
+* `AcceptNum`: Last ballot process accepted a value in, initially <0,0>
+* `AcceptVal`: last accepted value (initially null)
+
 1. leader election (whoever has highest ballot number, ties broken by process id)
 
     * ("prepare", Ballot)
