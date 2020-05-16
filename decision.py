@@ -1,6 +1,7 @@
 from dataclasses import dataclass
-import transaction
+from transaction import transaction
 
 @dataclass
 class decision:
+    ballot: ballot
     value : transaction

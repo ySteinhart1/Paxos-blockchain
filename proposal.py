@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-import ballot
+from ballot import ballot
 
 @dataclass
 class proposal:

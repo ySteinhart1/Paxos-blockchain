@@ -1,6 +1,6 @@
 from dataclasses import dataclass
-import transaction
-import ballot
+from transaction import transaction
+from ballot import ballot
 
 @dataclass
 class accept:
