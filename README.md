@@ -22,6 +22,13 @@ Each client should have the following variables:
 * `AcceptNum`: Last ballot process accepted a value in, initially <0,0>
 * `AcceptVal`: last accepted value (initially null)
 
+Event Types:
+* Proposal
+* Promise
+* Accept
+* Accepted
+* Decision
+
 1. leader election (whoever has highest ballot number, ties broken by process id)
 
     * ("prepare", Ballot)
