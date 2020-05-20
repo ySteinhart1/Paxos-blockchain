@@ -21,6 +21,7 @@ logger.setLevel(logging.DEBUG)
 port_mapping = {}
 ip = None
 event_queue = Queue()
+pending_transaction_queue = Queue()
 
 def configure(client_number: int):
     global ip
@@ -68,12 +69,20 @@ def event_enqueue(conn: socket, addr):
         logger.debug("received event from %s", addr)
         event_queue.put(event)
 
+def transaction_enqueue():
+    transaction = pending_transaction_queue.get(True, None)
+
+    
 
 def send_event(event, destination: int):
     logger.debug("sending message to client %s", destination)
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.connect((ip, port_mapping[destination]))
-        sock.send(pickle.dumps(event))
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.connect((ip, port_mapping[destination]))
+            sock.send(pickle.dumps(event))
+    except (socket.error, socket.gaierror) as e:
+        logger.debug("failed to send message")
+
         
 def consumer(pid: int):
     ballotNum = ballot(0, 0)
