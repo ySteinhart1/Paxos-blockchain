@@ -4,3 +4,4 @@ from dataclasses import dataclass
 class ballot:
     ballotNum : int
     proposer : int
+    depth : int = field(order=False)
