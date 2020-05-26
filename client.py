@@ -1,4 +1,5 @@
 import logging
+import re
 import sys
 import socket
 import threading
@@ -30,9 +31,17 @@ pending_transaction_queue = Queue()
 ballotMap = {}
 acceptedBals = {}
 blockchain = blockchain()
+ballotNum = ballot(0, 0, 0)
+acceptNum = ballot(0, 0, 0)
+acceptVal = None
+current_transaction = None
+balance = 100
+pid = 0
 
 def configure(client_number: int):
     global ip
+    global pid
+    pid = client_number
     config = yaml.safe_load(open('config.yaml'))
     ip = config['default_ip']
     listening_port = config[client_number]
@@ -50,20 +59,28 @@ def initialize(ip: str, port: int, pid: int):
     port_listener.start()
     consumer_thread = threading.Thread(target = consumer, args = [pid])
     consumer_thread.start()
+    transaction_enqueue_thread = threading.Thread(target = transaction_enqueue)
+    transaction_enqueue_thread.start()
     user_input()
 
 def user_input():
-    num = int(input())
-    if num == 1:
-        t1 = threading.Thread(target=send_event, args=["hello", 2])
-        t2 = threading.Thread(target=send_event, args=["hello", 2])
-        t1.start()
-        t2.start()
-    if num == 2:
-        send_event("hello", 1)
-    if num ==3:
-        pending_transaction_queue.put(transaction(4, 5, 6))
-        event_queue.put(start_paxos("begin"))
+    transaction_re = re.compile(r'moneyTransfer\((\d+), (\d+), (\d+)\)')
+    while True:
+        user_input = input()
+        transaction_event = transaction_re.match(user_input)
+        if user_input == 'print blockchain':
+            print(blockchain)
+            print('depth of blockchain: ', blockchain.depth)
+        elif user_input == 'print balance':
+            print(f'balance: {balance}')
+        elif transaction_event:
+            print("transaction initiated")
+            sender = int(transaction_event.group(1))
+            receiver = int(transaction_event.group(2))
+            amount = int(transaction_event.group(3))
+            logger.debug("adding transaction with sender: %s, receiver: %s, amount: %s", sender, receiver, amount)
+            pending_transaction_queue.put(sender, receiver, amount)
+
 
 def listener(ip: str, port: int):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -84,11 +101,13 @@ def event_enqueue(conn: socket, addr):
         event_queue.put(event)
 
 def transaction_enqueue():
-    transaction = pending_transaction_queue.get(True, None)
-
-
-
-    
+    logger.debug("transaction enqueuer started")
+    while True:
+        if not pending_transaction_queue.empty():
+            logger.debug("starting leader election due to new transaction")
+            event_queue.put(start_paxos("begin"))
+            time.sleep(60)
+        
 
 def send_event(event, destination: int):
     logger.debug("sending message to client %s", destination)
@@ -101,86 +120,19 @@ def send_event(event, destination: int):
 
         
 def consumer(pid: int):
-    ballotNum = ballot(0, 0)
-    acceptNum = ballot(0, 0)
-    acceptVal = None
-    global ballotMap
-    global acceptedBals
-    global blockchain
-    current_transaction = None
     while True:
         event = event_queue.get(True, None)
         logger.debug("Processing event of type: %s", type(event))
         if isinstance(event, start_paxos):
-            ballotNum = ballot(ballotNum.ballotNum + 1, pid, blockchain.depth + 1)
-            for process in range (1, 6):
-                if process != pid:
-                    sender = threading.Thread(target= send_event, args = [
-                        proposal(ballotNum),
-                        process
-                    ])
-                    sender.start()
-            ballotMap[ballotNum] = []
-            timeout = threading.Thread(target=timeout_proposal, args=[ballotNum])
-            timeout.start()
+            start_paxos_handler(event)
         if isinstance(event, proposal):
-            if event.ballot.depth == blockchain.depth + 1 and event.ballot >= ballotNum:
-                ballotNum = event.ballot
-                sender = threading.Thread(target = send_event, args = [
-                    promise(event.ballot, acceptNum, acceptVal),
-                    event.ballot.proposer
-                ])
-                sender.start()
-            elif event.ballot.depth <= blockchain.depth:
-                #TODO send stale blockchain message
-                # send missing nodes
-            elif event.ballot.depth > blockchain.depth + 1:
-                #TODO update blockchain by requesting from sender
-                #Accept proposal
+            proposal_handler(event)
         elif isinstance(event, promise):
-            ballotMap[event.ballot].append(event)
-            if len(ballotMap[event.ballot]) == 2:
-                maxpromise = max(ballotMap[event.ballot], key=lambda p: p.acceptNum)
-                logger.debug("Max promise received: %s", maxpromise)
-                if maxpromise.acceptVal:
-                    current_transaction = maxpromise.acceptVal
-                else:
-                    current_transaction = compute_block()
-                if ballotNum not in acceptedBals:
-                    acceptedBals[ballotNum] = 0
-                for process in range (1, 6):
-                        if process != pid:
-                            sender = threading.Thread(target= send_event, args = [
-                                accept(ballotNum, current_transaction),
-                                process
-                            ])
-                            sender.start()
-                timeout = threading.Thread(target=timeout_acceptance, args=[ballotNum])
-                timeout.start()
+            promise_handler(event)
         elif isinstance(event, accept):
-            if event.ballot.depth == blockchain.dept + 1 and event.ballot >= ballotNum:
-                acceptNum = event.ballot
-                acceptVal = event.myVal
-                sender = threading.Thread(target= send_event, args = [
-                    accepted(event.ballot, event.myVal), event.ballot.proposer
-                ])
-                sender.start()
-            elif event.ballot.depth <= blockchain.depth:
-                #TODO send stale blockchain message
-            elif event.ballot.depth > blockchain.depth + 1:
-                #TODO update blockchain by requesting from sender
-                #Accept proposal
+            accept_handler(event)
         elif isinstance(event, accepted):
-            acceptedBals[event.ballot] += 1
-            if acceptedBals[event.ballot] == 2:
-                for process in range (1, 6):
-                        if process != pid:
-                            sender = threading.Thread(target= send_event, args = [
-                                decision(ballotNum, current_transaction),
-                                process
-                            ])
-                            sender.start()
-                            acceptVal = None
+            accepted_handler(event)
         elif isinstance(event, decision):
             append_block(event.value)
             acceptVal = None
@@ -198,13 +150,113 @@ def timeout_acceptance(ballotNum):
     if acceptedBals[ballotNum] < 2:
         event_queue.put(start_paxos("begin"))
 
-                
-def compute_block() -> transaction:
-    return transaction(1, 2, 3)
+# TODO: spawn thread to prevent this from being blocking
+def compute_block() -> node:
+    transactions = []
+    while not pending_transaction_queue.empty():
+        transaction = pending_transaction_queue.get()
+        logger.debug("pending transaction: %s", transaction)
+        transactions.append(transaction)
+    logger.debug("About to compute block with transactions: %s", transactions)
+    block = node(transactions)
+    logger.debug("computed a new block")
+    logger.debug("%s", block)
+    return block
 
-def append_block(transaction : transaction):
-    pass
+def append_block(block : node):
+    logger.debug("adding a new block to blockchain")
+    logger.debug("%s", block)
+    blockchain.addNode(block)
 
+def start_paxos_handler(event: start_paxos):
+    global ballotNum
+    global pid
+    ballotNum = ballot(ballotNum.ballotNum + 1, pid, blockchain.depth + 1)
+    for process in range (1, 6):
+        if process != pid:
+                sender = threading.Thread(target= send_event, args = [
+                        proposal(ballotNum),
+                        process
+                ])
+                sender.start()
+    ballotMap[ballotNum] = []
+    timeout = threading.Thread(target=timeout_proposal, args=[ballotNum])
+    timeout.start()
+
+
+def proposal_handler(event: proposal):
+    global ballotNum
+    global pid
+    if event.ballot.depth == blockchain.depth + 1 and event.ballot >= ballotNum:
+        ballotNum = event.ballot
+        sender = threading.Thread(target = send_event, args = [
+                promise(event.ballot, acceptNum, acceptVal),
+                event.ballot.proposer
+            ])
+        sender.start()
+    elif event.ballot.depth <= blockchain.depth:
+        #TODO send stale blockchain message
+        # send missing nodes
+        pass
+    elif event.ballot.depth > blockchain.depth + 1:
+        #TODO update blockchain by requesting from sender
+        #Accept proposal
+        pass
+
+def accepted_handler(event: accepted):
+    global pid
+    acceptedBals[event.ballot] += 1
+    if acceptedBals[event.ballot] == 2:
+        for process in range (1, 6):
+            if process != pid:
+                sender = threading.Thread(target= send_event, args = [
+                    decision(ballotNum, current_transaction),
+                    process
+                ])
+                sender.start()
+        blockchain.addNode(current_transaction)
+
+def promise_handler(event: promise):
+    global pid
+    global current_transaction
+    ballotMap[event.ballot].append(event)
+    if len(ballotMap[event.ballot]) == 2:
+        maxpromise = max(ballotMap[event.ballot], key=lambda p: p.acceptNum)
+        logger.debug("Max promise received: %s", maxpromise)
+        if maxpromise.acceptVal:
+
+            current_transaction = maxpromise.acceptVal
+        else:
+            current_transaction = compute_block()
+        if ballotNum not in acceptedBals:
+            acceptedBals[ballotNum] = 0
+        for process in range (1, 6):
+                if process != pid:
+                    sender = threading.Thread(target= send_event, args = [
+                        accept(ballotNum, current_transaction),
+                        process
+                    ])
+                    sender.start()
+        timeout = threading.Thread(target=timeout_acceptance, args=[ballotNum])
+        timeout.start()
+
+
+def accept_handler(event: accept):
+    global pid
+    if event.ballot.depth == blockchain.depth + 1 and event.ballot >= ballotNum:
+        acceptNum = event.ballot
+        acceptVal = event.myVal
+        sender = threading.Thread(target= send_event, args = [
+            accepted(event.ballot, event.myVal), event.ballot.proposer
+        ])
+        sender.start()
+    elif event.ballot.depth <= blockchain.depth:
+        #TODO send stale blockchain message
+        pass
+    elif event.ballot.depth > blockchain.depth + 1:
+        #TODO update blockchain by requesting from sender
+        #Accept proposal
+        pass
 
 
 def main(argv):
