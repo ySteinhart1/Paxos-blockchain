@@ -16,6 +16,8 @@ from promise import promise
 from accept import accept
 from accepted import accepted
 from decision import decision
+from stale import stale
+from request import request
 from typing import NewType
 from blockchain import node, blockchain
 
@@ -136,6 +138,10 @@ def consumer(pid: int):
         elif isinstance(event, decision):
             append_block(event.value)
             acceptVal = None
+        elif isinstance(event, stale):
+            stale_handler(event)
+        elif isinstance(event, request):
+            request_handler
             
 def timeout_proposal(ballotNum):
     global ballotMap
@@ -257,6 +263,19 @@ def accept_handler(event: accept):
         #TODO update blockchain by requesting from sender
         #Accept proposal
         pass
+
+def stale_handler(event : stale):
+    blockchain = blockchain()
+    while event.blocks:
+        blockchain.addNode(event.blocks.pop(-1))
+    ballotNum = (max(event.ballotNum.ballotNum), pid, blockchain.depth)
+
+def request_handler(event : request):
+    sender = threading.Thread(target= send_event, args = [
+        stale(ballotNum, blockchain),
+        event.requester
+    ])
+    sender.start
 
 
 def main(argv):
