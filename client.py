@@ -20,6 +20,7 @@ from stale import stale
 from request import request
 from typing import NewType
 from blockchain import node, blockchain
+from message import message
 
 
 logging.basicConfig(format='%(levelname)s - %(message)s')
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 port_mapping = {}
+link_status = {}
 ip = None
 event_queue = Queue()
 pending_transaction_queue = Queue()
@@ -51,7 +53,9 @@ def configure(client_number: int):
     for num, port in config.items():
         if isinstance(num, int):
             port_mapping[num] = port
+            link_status[num] = True
     logger.debug('port mapping: %s', port_mapping)
+    logger.debug('initial link statuses: %s', link_status)
     initialize(ip, listening_port, client_number)
 
 # TODO: needs to start thread for user input
@@ -67,23 +71,34 @@ def initialize(ip: str, port: int, pid: int):
 
 def user_input():
     transaction_re = re.compile(r'moneyTransfer\((\d+), (\d+), (\d+)\)')
+    fail_link_re = re.compile(r'failLink\((\d+)\)')
+    fix_link_re = re.compile(r'fixLink\((\d+)\)')
     while True:
         user_input = input()
         transaction_event = transaction_re.match(user_input)
+        fail_link_event = fail_link_re.match(user_input)
+        fix_link_event = fix_link_re.match(user_input)
         if user_input == 'print blockchain':
             print(blockchain)
-            print('depth of blockchain: ', blockchain.depth)
+            logger.info('depth of blockchain: %s', blockchain.depth)
         elif user_input == 'print balance':
             print(f'balance: {balance}')
         elif transaction_event:
-            print("transaction initiated")
+            logger.debug("transaction initiated")
             sender = int(transaction_event.group(1))
             receiver = int(transaction_event.group(2))
             amount = int(transaction_event.group(3))
-            logger.debug("adding transaction with sender: %s, receiver: %s, amount: %s", sender, receiver, amount)
+            logger.info("adding transaction with sender: %s, receiver: %s, amount: %s", sender, receiver, amount)
             pending_transaction_queue.put(sender, receiver, amount)
-
-
+        elif fail_link_event:
+            dest = int(fail_link_event.group(1))
+            logger.debug("failing link from %d to %d", pid, dest)
+            link_status[dest] = False
+        elif fix_link_event:
+            dest = int(fix_link_event.group(1))
+            logger.debug("fixing link from %d to %d", pid, dest)
+            link_status[dest] = True
+            
 def listener(ip: str, port: int):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -98,9 +113,10 @@ def listener(ip: str, port: int):
 
 def event_enqueue(conn: socket, addr):
     with conn:
-        event = pickle.loads(conn.recv(1024))
+        msg = pickle.loads(conn.recv(1024))
         logger.debug("received event from %s", addr)
-        event_queue.put(event)
+        if isinstance(msg, message) and link_status[msg.sender]:
+            event_queue.put(msg.event)
 
 def transaction_enqueue():
     logger.debug("transaction enqueuer started")
@@ -113,15 +129,17 @@ def transaction_enqueue():
 
 def send_event(event, destination: int):
     logger.debug("sending message to client %s", destination)
+    msg = message(pid, destination, event)
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.connect((ip, port_mapping[destination]))
-            sock.send(pickle.dumps(event))
-    except (socket.error, socket.gaierror) as e:
+            sock.send(pickle.dumps(msg))
+    except (socket.error, socket.gaierror):
         logger.debug("failed to send message")
 
         
 def consumer(pid: int):
+    global acceptVal
     while True:
         event = event_queue.get(True, None)
         logger.debug("Processing event of type: %s", type(event))
@@ -249,6 +267,8 @@ def promise_handler(event: promise):
 
 def accept_handler(event: accept):
     global pid
+    global acceptNum
+    global acceptVal
     if event.ballot.depth == blockchain.depth + 1 and event.ballot >= ballotNum:
         acceptNum = event.ballot
         acceptVal = event.myVal
@@ -265,6 +285,8 @@ def accept_handler(event: accept):
         pass
 
 def stale_handler(event : stale):
+    global blockchain
+    global ballotNum
     blockchain = blockchain()
     while event.blocks:
         blockchain.addNode(event.blocks.pop(-1))
@@ -275,7 +297,7 @@ def request_handler(event : request):
         stale(ballotNum, blockchain),
         event.requester
     ])
-    sender.start
+    sender.start()
 
 
 def main(argv):

@@ -1,9 +1,9 @@
-from dataclasses import dataclasses
+from dataclasses import dataclass
 from blockchain import blockchain, node
 from ballot import ballot
 from typing import List
 
-@dataclasses
+@dataclass
 class stale:
     ballotNum : ballot
     blocks : List[node]
