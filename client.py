@@ -65,7 +65,6 @@ def configure(client_number: int):
     logger.debug('initial link statuses: %s', link_status)
     initialize(ip, listening_port, client_number)
 
-# TODO: needs to start thread for user input
 def initialize(ip: str, port: int, pid: int):
     """Starts up threads to listen for incoming messages and user input"""
     restore_state()
@@ -78,8 +77,11 @@ def initialize(ip: str, port: int, pid: int):
     transaction_enqueue_thread = threading.Thread(target = transaction_enqueue)
     transaction_enqueue_thread.daemon = True
     transaction_enqueue_thread.start()
+    if current_block:
+        logger.debug("restarting paxos due to current block in save state")
+        event_queue.put(start_paxos("begin"))
     user_input()
-    # TODO: if current block, need to restart paxos (case where block was computed, then crash but you would still be leader)
+    
 
 def user_input():
     global link_status
@@ -157,7 +159,7 @@ def transaction_enqueue():
         
 
 def send_event(event, destination: int):
-    # TODO: Add 5 second delay on all messages
+    time.sleep(3)
     global link_status
     msg = message(pid, destination, event)
     if link_status[destination]:
@@ -207,7 +209,6 @@ def timeout_acceptance(ballotNum):
     if acceptedBals[ballotNum] < 2:
         event_queue.put(start_paxos("begin"))
 
-# TODO: spawn thread to prevent this from being blocking
 def compute_block() -> node:
     global current_block
     global block_chain
