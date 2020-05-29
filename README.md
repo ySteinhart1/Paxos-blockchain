@@ -60,4 +60,13 @@ Event Types:
 * Check if connection is open before sending a message
 * Block a reception by dropping messages
 
-## Considerations
+## text cases
+
+- Multiple processes competing for Paxos
+- Recovery after crashing mid paxos
+- no possible quorum
+- crash after block computed before getting accepted
+- fail link with majority
+- stale message recovery off a proposal
+- stale message recovery off an accept
+- Stale message recovery off incorrect process
