@@ -7,7 +7,7 @@ class transaction:
     amount: int
 
     def __repr__(self):
-        return f"{{sender: {sender}, receiver: {receiver}, amount: {amount}}}"
+        return f"{{sender: {self.sender}, receiver: {self.receiver}, amount: {self.amount}}}"
     
     def __str__(self):
-        return f"{{sender: {sender}, receiver: {receiver}, amount: {amount}}}"
+        return f"{{sender: {self.sender}, receiver: {self.receiver}, amount: {self.amount}}}"

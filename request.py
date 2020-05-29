@@ -1,7 +1,7 @@
-from dataclasses import dataclasses
+from dataclasses import dataclass
 from ballot import ballot
 
-@dataclasses
+@dataclass
 class request:
     ballot : ballot
     requester : int
