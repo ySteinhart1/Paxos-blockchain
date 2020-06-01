@@ -25,10 +25,10 @@ class node:
         return nonce
 
     def __repr__(self):
-        return f"{{transactions: {str(self.transactions)}, nonce: {self.nonce}, hash: {self.hash}}}"
+        return f"{{transactions: {str(self.transactions)}, nonce: {self.nonce}, hash pointer: ({self.hash}, {self.prev})}}"
 
     def __str__(self):
-        return f"{{transactions: {str(self.transactions)}, nonce: {self.nonce}, hash: {self.hash}}}"
+        return f"{{transactions: {str(self.transactions)}, nonce: {self.nonce}, hash pointer: ({self.hash}, {self.prev})}}"
     
     def __eq__(self, value):
         return (self.transactions == value.transactions) and (self.ballotNum == value.ballotNum)
@@ -52,7 +52,7 @@ class blockchain:
         blockString = ""
         n = self.tail
         while n:
-            blockString = f"{{transactions: {n.transactions}, nonce: {n.nonce}, hash: {n.hash}}}\n" + blockString
+            blockString = f"{{transactions: {n.transactions}, nonce: {n.nonce}, hash pointer: ({n.hash}, {id(n.prev)})}}\n" + blockString
             n = n.prev
         return blockString
 
@@ -60,7 +60,7 @@ class blockchain:
         blockString = ""
         n = self.tail
         while n:
-            blockString = f"{{transactions: {n.transactions}, nonce: {n.nonce}, hash: {n.hash}}}\n" + blockString
+            blockString = f"{{transactions: {n.transactions}, nonce: {n.nonce}, hash pointer: ({n.hash}, {id(n.prev)})}}\n" + blockString
             n = n.prev
         return blockString
 
