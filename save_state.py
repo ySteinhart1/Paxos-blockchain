@@ -7,3 +7,5 @@ class save_state:
     pending_transaction_queue: deque
     current_block: node
     block_chain: blockchain
+    balance: int
+    pending_credit: int

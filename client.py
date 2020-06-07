@@ -28,7 +28,7 @@ from save_state import save_state
 
 logging.basicConfig(format='%(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 port_mapping = {}
 link_status = {}
@@ -47,7 +47,6 @@ pending_credit = 0
 pid = 0
 current_block = None
 finished_paxos = True
-# TODO: add some fricking locks 
 
 def configure(client_number: int):
     global ip
@@ -78,7 +77,7 @@ def initialize(ip: str, port: int, pid: int):
     transaction_enqueue_thread.daemon = True
     transaction_enqueue_thread.start()
     if current_block:
-        logger.debug("restarting paxos due to current block in save state")
+        logger.info("restarting paxos due to current block in save state")
         event_queue.put(start_paxos("begin"))
     user_input()
     
@@ -89,6 +88,7 @@ def user_input():
     global balance
     global block_chain
     global pending_credit
+    global current_block
     transaction_re = re.compile(r'moneyTransfer\((\d+), (\d+), (\d+)\)')
     fail_link_re = re.compile(r'failLink\((\d+)\)')
     fix_link_re = re.compile(r'fixLink\((\d+)\)')
@@ -105,24 +105,31 @@ def user_input():
         elif user_input == 'failProcess' or user_input == 'exit':
             save_process()
             break
+        elif user_input == 'print queue':
+            print("Pending transactions:")
+            if current_block:
+                for trans in current_block.transactions:
+                    print(trans)
+            for trans in pending_transaction_queue:
+                print(trans)
         elif transaction_event:
             logger.debug("transaction initiated")
             sender = int(transaction_event.group(1))
             receiver = int(transaction_event.group(2))
             amount = int(transaction_event.group(3))
-            pending_credit += amount
-            if not balance - pending_credit < 0:        
+            if balance - pending_credit >= amount: 
+                pending_credit += amount
                 logger.info("adding transaction with sender: %s, receiver: %s, amount: %s", sender, receiver, amount)
                 pending_transaction_queue.append(transaction(sender, receiver, amount))
             else:
-                print("failed to initiate transaction: spending too much")
+                logger.info("failed to initiate transaction: spending too much")
         elif fail_link_event:
             dest = int(fail_link_event.group(1))
-            logger.debug("failing link from %d to %d", pid, dest)
+            logger.info("failing link from %d to %d", pid, dest)
             link_status[dest] = False
         elif fix_link_event:
             dest = int(fix_link_event.group(1))
-            logger.debug("fixing link from %d to %d", pid, dest)
+            logger.info("fixing link from %d to %d", pid, dest)
             link_status[dest] = True
             
 
@@ -136,6 +143,7 @@ def listener(ip: str, port: int):
             conn, addr = sock.accept()
             logger.debug("accepted incoming socket from %s", addr)
             processor = threading.Thread(target = event_enqueue, args=[conn, addr])
+            processor.daemon = True
             processor.start()
 
 def event_enqueue(conn: socket, addr):
@@ -153,7 +161,7 @@ def transaction_enqueue():
         if len(pending_transaction_queue) != 0 and finished_paxos:
             finished_paxos = False
             time.sleep(random.randint(3, 7))
-            logger.debug("starting leader election due to new transaction")
+            logger.info("starting leader election due to new transaction")
             event_queue.put(start_paxos("begin"))
 
         
@@ -177,7 +185,7 @@ def consumer(pid: int):
     global current_block
     while True:
         event = event_queue.get(True, None)
-        logger.debug("Processing event of type: %s", type(event))
+        logger.info("Processing event of type: %s", type(event))
         if isinstance(event, start_paxos):
             start_paxos_handler(event)
         if isinstance(event, proposal):
@@ -198,15 +206,17 @@ def consumer(pid: int):
             
 def timeout_proposal(ballotNum):
     global ballotMap
-    time.sleep(15)
+    time.sleep(20)
     if len(ballotMap[ballotNum]) < 2:
+        logger.info("restarted paxos due to timeout because of proposal")
         event_queue.put(start_paxos("begin"))
 
 
 def timeout_acceptance(ballotNum):
     global acceptedBals
-    time.sleep(15)
+    time.sleep(20)
     if acceptedBals[ballotNum] < 2:
+        logger.info("restarted paxos due to timeout because of acceptance")
         event_queue.put(start_paxos("begin"))
 
 def compute_block() -> node:
@@ -222,8 +232,8 @@ def compute_block() -> node:
         transactions.append(transaction)
     logger.debug("About to compute block with transactions: %s", transactions)
     block = node(transactions, ballotNum, block_chain.tail)
-    logger.debug("computed a new block")
-    logger.debug("%s", block)
+    logger.info("computed a new block")
+    logger.info("%s", block)
     current_block = block
     return block
 
@@ -231,8 +241,8 @@ def append_block(block : node):
     global current_block
     global pending_credit
     global balance
-    logger.debug("adding a new block to blockchain")
-    logger.debug("%s", block)
+    logger.info("adding a new block to blockchain")
+    logger.info("%s", block)
     if current_block and block == current_block:
         current_block = None
     block_chain.addNode(block)
@@ -247,41 +257,48 @@ def start_paxos_handler(event: start_paxos):
     global ballotNum
     global pid
     ballotNum = ballot(ballotNum.ballotNum + 1, pid, block_chain.depth + 1)
+    logger.info("sending out proposal with ballot: %s", str(ballotNum))
     for process in range (1, 6):
         if process != pid:
                 sender = threading.Thread(target= send_event, args = [
                         proposal(ballotNum),
                         process
                 ])
+                sender.daemon = True
                 sender.start()
     ballotMap[ballotNum] = []
     timeout = threading.Thread(target=timeout_proposal, args=[ballotNum])
+    timeout.daemon = True
     timeout.start()
 
 
 def proposal_handler(event: proposal):
     global ballotNum
     global pid
+    logger.info("received proposal with following value: %s", str(event.ballot))
     if event.ballot.depth == block_chain.depth + 1 and event.ballot >= ballotNum:
         ballotNum = event.ballot
         sender = threading.Thread(target = send_event, args = [
                 promise(event.ballot, acceptNum, acceptVal),
                 event.ballot.proposer
             ])
+        sender.daemon = True
         sender.start()
     elif event.ballot.depth <= block_chain.depth:
-        logger.debug("sender was out of date, sending them a stale message")
+        logger.info("sender was out of date, sending them a stale message")
         sender = threading.Thread(target= send_event, args=[
             stale(ballotNum, block_chain),
             event.ballot.proposer
         ])
+        sender.daemon = True
         sender.start()
     elif event.ballot.depth > block_chain.depth + 1:
-        logger.debug("out of date: sending request")
+        logger.info("out of date: sending request")
         requester = threading.Thread(target= send_event, args=[
             request(ballotNum, pid),
             event.ballot.proposer
         ])
+        requester.daemon = True
         requester.start()
 
 def accepted_handler(event: accepted):
@@ -295,6 +312,7 @@ def accepted_handler(event: accepted):
                     decision(ballotNum, current_transaction),
                     process
                 ])
+                sender.daemon = True
                 sender.start()
         append_block(current_transaction)
         finished_paxos = True
@@ -305,7 +323,7 @@ def promise_handler(event: promise):
     ballotMap[event.ballot].append(event)
     if len(ballotMap[event.ballot]) == 2:
         maxpromise = max(ballotMap[event.ballot], key=lambda p: p.acceptNum)
-        logger.debug("Max promise received: %s", maxpromise)
+        logger.info("Max promise received: %s", maxpromise)
         if maxpromise.acceptVal:
 
             current_transaction = maxpromise.acceptVal
@@ -313,15 +331,20 @@ def promise_handler(event: promise):
             current_transaction = compute_block()
         if ballotNum not in acceptedBals:
             acceptedBals[ballotNum] = 0
-        for process in range (1, 6):
-                if process != pid:
-                    sender = threading.Thread(target= send_event, args = [
-                        accept(ballotNum, current_transaction),
-                        process
-                    ])
-                    sender.start()
-        timeout = threading.Thread(target=timeout_acceptance, args=[ballotNum])
-        timeout.start()
+        if current_transaction.transactions:
+            for process in range (1, 6):
+                    if process != pid:
+                        sender = threading.Thread(target= send_event, args = [
+                            accept(ballotNum, current_transaction),
+                            process
+                        ])
+                        sender.daemon = True
+                        sender.start()
+            timeout = threading.Thread(target=timeout_acceptance, args=[ballotNum])
+            timeout.daemon = True
+            timeout.start()
+        else:
+            logger.debug("Computed block with no transactions, stopping paxos")
 
 
 def accept_handler(event: accept):
@@ -334,20 +357,23 @@ def accept_handler(event: accept):
         sender = threading.Thread(target= send_event, args = [
             accepted(event.ballot, event.myVal), event.ballot.proposer
         ])
+        sender.daemon = True
         sender.start()
     elif event.ballot.depth <= block_chain.depth:
-        logger.debug("sender was out of date, sending them a stale message")
+        logger.info("sender was out of date, sending them a stale message")
         sender = threading.Thread(target= send_event, args=[
             stale(ballotNum, block_chain),
             event.ballot.proposer
         ])
+        sender.daemon = True
         sender.start()
     elif event.ballot.depth > block_chain.depth + 1:
-        logger.debug("out of date: sending request")
+        logger.info("out of date: sending request")
         requester = threading.Thread(target= send_event, args=[
             request(ballotNum, pid),
             event.ballot.proposer
         ])
+        requester.daemon = True
         requester.start()
         
 
@@ -363,11 +389,12 @@ def stale_handler(event : stale):
     ballotNum = ballot(event.ballotNum.ballotNum, pid, block_chain.depth)
 
 def request_handler(event : request):
-    logger.debug("received a request from %s", event.requester)
+    logger.info("received a request from %s", event.requester)
     sender = threading.Thread(target= send_event, args = [
         stale(ballotNum, block_chain),
         event.requester
     ])
+    sender.daemon = True
     sender.start()
 
 def save_process():
@@ -375,9 +402,11 @@ def save_process():
     global current_block
     global block_chain
     global pid
-    logger.debug("saving ")
+    global balance
+    global pending_credit
+    logger.info("saving state!")
     saved_client = save_state(pending_transaction_queue, current_block,
-                                block_chain)
+                                block_chain, balance, pending_credit)
     with open(f'client_{pid}.data', 'w+b') as save_file:
         pickle.dump(saved_client, save_file)
 
@@ -385,13 +414,18 @@ def restore_state():
     global pending_transaction_queue
     global current_block
     global block_chain
+    global balance
+    global pending_credit
     path = pathlib.Path(f'client_{pid}.data')
     if path.exists():
+        logger.info("Restoring from a saved state")
         with open(path, 'rb') as save_file:
             save_state = pickle.load(save_file)
             pending_transaction_queue = save_state.pending_transaction_queue
             current_block = save_state.current_block
             block_chain = save_state.block_chain
+            balance = save_state.balance
+            pending_credit = save_state.pending_credit
     
 
 def main(argv):
